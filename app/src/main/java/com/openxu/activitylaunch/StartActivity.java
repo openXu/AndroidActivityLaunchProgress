@@ -1522,6 +1522,7 @@ public class StartActivity extends Activity{
      *  然后调用handleResumeActivity函数来使这个Activity进入Resumed状态，并回调这个Activity的onResume函数。
      */
     private void handleLaunchActivity(ActivityClientRecord r, Intent customIntent) {
+
         ...
         //创建Activity对象，并初始化，然后调用activity.attach()和onCreate()
         Activity a = performLaunchActivity(r, customIntent);
