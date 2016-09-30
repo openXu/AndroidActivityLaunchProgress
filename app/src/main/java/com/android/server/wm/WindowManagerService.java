@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package com.android.server.am;
+package com.android.server.wm;
 
 import static android.view.WindowManager.LayoutParams.*;
 
@@ -43,6 +43,7 @@ import com.android.server.LocalServices;
 import com.android.server.UiThread;
 import com.android.server.Watchdog;
 import com.android.server.am.BatteryStatsService;
+import com.android.server.am.IWindowSession;
 import com.android.server.input.InputManagerService;
 import com.android.server.power.ShutdownThread;
 
@@ -8147,7 +8148,7 @@ public class WindowManagerService extends IWindowManager.Stub
 
     @Override
     public IWindowSession openSession(IWindowSessionCallback callback, IInputMethodClient client,
-            IInputContext inputContext) {
+                                      IInputContext inputContext) {
         if (client == null) throw new IllegalArgumentException("null client");
         if (inputContext == null) throw new IllegalArgumentException("null inputContext");
         Session session = new Session(this, callback, client, inputContext);

@@ -2,34 +2,55 @@ package com.openxu.activitylaunch;
 
 import android.animation.ValueAnimator;
 import android.app.Activity;
+import android.app.AppOpsManager;
 import android.app.Application;
 import android.app.Instrumentation;
 import android.app.VoiceInteractor;
 import android.content.Context;
 import android.content.pm.ActivityInfo;
 import android.content.res.Configuration;
+import android.content.res.Resources;
 import android.graphics.PixelFormat;
+import android.graphics.Point;
 import android.graphics.Rect;
 import android.graphics.Region;
 import android.hardware.display.DisplayManager;
+import android.os.Binder;
+import android.os.Debug;
 import android.os.IBinder;
 import android.os.Looper;
 import android.os.RemoteException;
+import android.util.DisplayMetrics;
 import android.util.Log;
 import android.view.Choreographer;
 import android.view.Display;
 import android.view.InputQueue;
+import android.view.Surface;
+import android.view.SurfaceHolder;
 import android.view.View;
 import android.view.ViewConfiguration;
 import android.view.ViewGroup;
 import android.view.ViewManager;
 import android.view.ViewParent;
+import android.view.ViewTreeObserver;
 import android.view.Window;
 import android.view.WindowManager;
 import android.view.accessibility.AccessibilityManager;
 import android.view.inputmethod.InputMethodManager;
 
 import com.android.server.am.IWindowSession;
+
+import static android.view.WindowManager.LayoutParams.FIRST_APPLICATION_WINDOW;
+import static android.view.WindowManager.LayoutParams.FIRST_SUB_WINDOW;
+import static android.view.WindowManager.LayoutParams.FLAG_SHOW_WALLPAPER;
+import static android.view.WindowManager.LayoutParams.LAST_APPLICATION_WINDOW;
+import static android.view.WindowManager.LayoutParams.LAST_SUB_WINDOW;
+import static android.view.WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY;
+import static android.view.WindowManager.LayoutParams.TYPE_APPLICATION_STARTING;
+import static android.view.WindowManager.LayoutParams.TYPE_INPUT_METHOD;
+import static android.view.WindowManager.LayoutParams.TYPE_INPUT_METHOD_DIALOG;
+import static android.view.WindowManager.LayoutParams.TYPE_PRIVATE_PRESENTATION;
+import static android.view.WindowManager.LayoutParams.TYPE_WALLPAPER;
 
 /**
  * author : openXu
@@ -93,6 +114,10 @@ public class ShowLayout extends Activity{
           ...
         }
     }
+
+    /**
+     * 相关类
+     */
 
     /**Window系列*/
     public abstract class Window {
@@ -170,8 +195,9 @@ public class ShowLayout extends Activity{
      *
      * WindowManagerGlobal.addView()方法中首先为Activity创建了一个视图层次结构的顶部类ViewRootImpl对象root,
      * ViewRootImpl构造方法中，会调用WindowManagerGlobal.getWindowSession()创建一个WindowManagerService
-     * 的类型为IWindowSession的Binder代理对象mWindowSession，这个mWindowSession将用于Activity与
-     * WindowManagerService通信，实现activity视图的显示控制。
+     * 的类型为IWindowSession的Binder代理对象mWindowSession，mWindowSession在整个应用程序中只有一个，因为
+     * WindowManagerGlobal是单例模式，所以整个应用程序都是通过这个唯一的mWindowSession与ActivityManagerService
+     * 通信，实现activity视图的显示控制。
      *
      */
     public final class WindowManagerGlobal {
@@ -216,8 +242,20 @@ public class ShowLayout extends Activity{
             synchronized (WindowManagerGlobal.class) {
                 if (sWindowSession == null) {
                     try {
+                        //首先获得获得应用程序所使用的输入法管理器
                         InputMethodManager imm = InputMethodManager.getInstance();
+                        //再获得系统中的WindowManagerService服务的一个Binder代理对象
                         IWindowManager windowManager = getWindowManagerService();
+                        /*
+                         * 调用它的成员函数openSession来请求WindowManagerService服务返回一个类型为Session的Binder本地对象.
+                         * 这个Binder本地对象返回来之后，就变成了一个类型为Session的Binder代理代象，
+                         * 即一个实现了IWindowSession接口的Binder代理代象，并且保存在ViewRoot类的静态成员变量sWindowSession中。
+                         * 在请求WindowManagerService服务返回一个类型为Session的Binder本地对象的时候，
+                         * 应用程序进程传递给WindowManagerService服务的参数有两个，
+                         * 一个是实现IInputMethodClient接口的输入法客户端对象，另外一个是实现了IInputContext接口的一
+                         * 个输入法上下文对象，
+                         * 它们分别是通过调用前面所获得的一个输入法管理器的成员函数getClient和getInputContext来获得的。
+                         */
                         sWindowSession = windowManager.openSession(
                                 new IWindowSessionCallback.Stub() {
                                     @Override
@@ -256,10 +294,7 @@ public class ShowLayout extends Activity{
                 }
                 ...
 
-                /**
-                 * 创建一个视图层次结构的顶部，ViewRootImpl实现所需视图和窗口之间的协议。
-                 * ViewRootImpl被创建后，会获取到一个IWindowSession类型
-                 */
+                //创建一个视图层次结构的顶部，ViewRootImpl实现所需视图和窗口之间的协议。
                 root = new ViewRootImpl(view.getContext(), display);
 
                 view.setLayoutParams(wparams);
@@ -278,10 +313,8 @@ public class ShowLayout extends Activity{
         }
     }
 
-
-
     /**
-     * step4: ViewRootImpl.setView(view)
+     * step3: ViewRootImpl.setView(view)
      */
     public final class ViewRootImpl implements ViewParent,
             View.AttachInfo.Callbacks, HardwareRenderer.HardwareDrawCallbacks {
@@ -289,9 +322,6 @@ public class ShowLayout extends Activity{
         final IWindowSession mWindowSession;
 
         public ViewRootImpl(Context context, Display display) {
-            /**
-             * WindowManagerGlobal是单例模式，应用程序第一个Activity被创建之后请求显示的时候，getWindowSession
-             */
             mWindowSession = WindowManagerGlobal.getWindowSession();
             ...
         }
@@ -300,220 +330,38 @@ public class ShowLayout extends Activity{
             synchronized (this) {
                 if (mView == null) {
                     mView = view;
+                    ...
 
-                    mAttachInfo.mDisplayState = mDisplay.getState();
-                    mDisplayManager.registerDisplayListener(mDisplayListener, mHandler);
-
-                    mViewLayoutDirectionInitial = mView.getRawLayoutDirection();
-                    //事件处理
-                    mFallbackEventHandler.setView(view);
-                    mWindowAttributes.copyFrom(attrs);
-                    if (mWindowAttributes.packageName == null) {
-                        mWindowAttributes.packageName = mBasePackageName;
-                    }
-                    attrs = mWindowAttributes;
-                    // Keep track of the actual window flags supplied by the client.
-                    mClientWindowLayoutFlags = attrs.flags;
-
-                    setAccessibilityFocus(null, null);
-
-                    if (view instanceof RootViewSurfaceTaker) {
-                        mSurfaceHolderCallback =
-                                ((RootViewSurfaceTaker)view).willYouTakeTheSurface();
-                        if (mSurfaceHolderCallback != null) {
-                            mSurfaceHolder = new TakenSurfaceHolder();
-                            mSurfaceHolder.setFormat(PixelFormat.UNKNOWN);
-                        }
-                    }
-
-                    // Compute surface insets required to draw at specified Z value.
-                    // 计算surface镶嵌所需的指定的Z值。
-                    // TODO: Use real shadow insets for a constant max Z.
-                    if (!attrs.hasManualSurfaceInsets) {
-                        final int surfaceInset = (int) Math.ceil(view.getZ() * 2);
-                        attrs.surfaceInsets.set(surfaceInset, surfaceInset, surfaceInset, surfaceInset);
-                    }
-
-                    CompatibilityInfo compatibilityInfo = mDisplayAdjustments.getCompatibilityInfo();
-                    mTranslator = compatibilityInfo.getTranslator();
-
-                    // If the application owns the surface, don't enable hardware acceleration
-                    if (mSurfaceHolder == null) {
-                        enableHardwareAcceleration(attrs);
-                    }
-
-                    boolean restore = false;
-                    if (mTranslator != null) {
-                        mSurface.setCompatibilityTranslator(mTranslator);
-                        restore = true;
-                        attrs.backup();
-                        mTranslator.translateWindowLayout(attrs);
-                    }
-                    if (DEBUG_LAYOUT) Log.d(TAG, "WindowLayout in setView:" + attrs);
-
-                    if (!compatibilityInfo.supportsScreen()) {
-                        attrs.privateFlags |= WindowManager.LayoutParams.PRIVATE_FLAG_COMPATIBLE_WINDOW;
-                        mLastInCompatMode = true;
-                    }
-
-                    mSoftInputMode = attrs.softInputMode;
-                    mWindowAttributesChanged = true;
-                    mWindowAttributesChangesFlag = WindowManager.LayoutParams.EVERYTHING_CHANGED;
-                    mAttachInfo.mRootView = view;
-                    mAttachInfo.mScalingRequired = mTranslator != null;
-                    mAttachInfo.mApplicationScale =
-                            mTranslator == null ? 1.0f : mTranslator.applicationScale;
-                    if (panelParentView != null) {
-                        mAttachInfo.mPanelParentWindowToken
-                                = panelParentView.getApplicationWindowToken();
-                    }
-                    mAdded = true;
                     int res; /* = WindowManagerImpl.ADD_OKAY; */
-
-                    // Schedule the first layout -before- adding to the window
-                    // manager, to make sure we do the relayout before receiving
-                    // any other events from the system.
+                    //请求对应用程序窗口视图的UI作第一次布局,应用程序窗口的绘图表面的创建过程
                     requestLayout();
-                    if ((mWindowAttributes.inputFeatures
-                            & WindowManager.LayoutParams.INPUT_FEATURE_NO_INPUT_CHANNEL) == 0) {
-                        mInputChannel = new InputChannel();
-                    }
+                    ...
                     try {
-                        mOrigWindowType = mWindowAttributes.type;
-                        mAttachInfo.mRecomputeGlobalAttributes = true;
-                        collectViewAttributes();
-                        //添加到WindowManagerServices中
+                        ...
                         res = mWindowSession.addToDisplay(mWindow, mSeq, mWindowAttributes,
                                 getHostVisibility(), mDisplay.getDisplayId(),
                                 mAttachInfo.mContentInsets, mAttachInfo.mStableInsets,
                                 mAttachInfo.mOutsets, mInputChannel);
                     } catch (RemoteException e) {
-                        mAdded = false;
-                        mView = null;
-                        mAttachInfo.mRootView = null;
-                        mInputChannel = null;
-                        mFallbackEventHandler.setView(null);
-                        unscheduleTraversals();
-                        setAccessibilityFocus(null, null);
+                        ...
                         throw new RuntimeException("Adding window failed", e);
-                    } finally {
-                        if (restore) {
-                            attrs.restore();
-                        }
                     }
+                    ...
 
-                    if (mTranslator != null) {
-                        mTranslator.translateRectInScreenToAppWindow(mAttachInfo.mContentInsets);
-                    }
-                    mPendingOverscanInsets.set(0, 0, 0, 0);
-                    mPendingContentInsets.set(mAttachInfo.mContentInsets);
-                    mPendingStableInsets.set(mAttachInfo.mStableInsets);
-                    mPendingVisibleInsets.set(0, 0, 0, 0);
-                    if (DEBUG_LAYOUT) Log.v(TAG, "Added window " + mWindow);
-                    if (res < WindowManagerGlobal.ADD_OKAY) {
-                        mAttachInfo.mRootView = null;
-                        mAdded = false;
-                        mFallbackEventHandler.setView(null);
-                        unscheduleTraversals();
-                        setAccessibilityFocus(null, null);
-                        switch (res) {
-                            case WindowManagerGlobal.ADD_BAD_APP_TOKEN:
-                            case WindowManagerGlobal.ADD_BAD_SUBWINDOW_TOKEN:
-                                throw new WindowManager.BadTokenException(
-                                        "Unable to add window -- token " + attrs.token
-                                                + " is not valid; is your activity running?");
-                            case WindowManagerGlobal.ADD_NOT_APP_TOKEN:
-                                throw new WindowManager.BadTokenException(
-                                        "Unable to add window -- token " + attrs.token
-                                                + " is not for an application");
-                            case WindowManagerGlobal.ADD_APP_EXITING:
-                                throw new WindowManager.BadTokenException(
-                                        "Unable to add window -- app for token " + attrs.token
-                                                + " is exiting");
-                            case WindowManagerGlobal.ADD_DUPLICATE_ADD:
-                                throw new WindowManager.BadTokenException(
-                                        "Unable to add window -- window " + mWindow
-                                                + " has already been added");
-                            case WindowManagerGlobal.ADD_STARTING_NOT_NEEDED:
-                                // Silently ignore -- we would have just removed it
-                                // right away, anyway.
-                                return;
-                            case WindowManagerGlobal.ADD_MULTIPLE_SINGLETON:
-                                throw new WindowManager.BadTokenException(
-                                        "Unable to add window " + mWindow +
-                                                " -- another window of this type already exists");
-                            case WindowManagerGlobal.ADD_PERMISSION_DENIED:
-                                throw new WindowManager.BadTokenException(
-                                        "Unable to add window " + mWindow +
-                                                " -- permission denied for this window type");
-                            case WindowManagerGlobal.ADD_INVALID_DISPLAY:
-                                throw new WindowManager.InvalidDisplayException(
-                                        "Unable to add window " + mWindow +
-                                                " -- the specified display can not be found");
-                            case WindowManagerGlobal.ADD_INVALID_TYPE:
-                                throw new WindowManager.InvalidDisplayException(
-                                        "Unable to add window " + mWindow
-                                                + " -- the specified window type is not valid");
-                        }
-                        throw new RuntimeException(
-                                "Unable to add window -- unknown error code " + res);
-                    }
-
-                    if (view instanceof RootViewSurfaceTaker) {
-                        mInputQueueCallback =
-                                ((RootViewSurfaceTaker)view).willYouTakeTheInputQueue();
-                    }
-                    if (mInputChannel != null) {
-                        if (mInputQueueCallback != null) {
-                            mInputQueue = new InputQueue();
-                            mInputQueueCallback.onInputQueueCreated(mInputQueue);
-                        }
-                        mInputEventReceiver = new WindowInputEventReceiver(mInputChannel,
-                                Looper.myLooper());
-                    }
-
-                    view.assignParent(this);
-                    mAddedTouchMode = (res & WindowManagerGlobal.ADD_FLAG_IN_TOUCH_MODE) != 0;
-                    mAppVisible = (res & WindowManagerGlobal.ADD_FLAG_APP_VISIBLE) != 0;
-
-                    if (mAccessibilityManager.isEnabled()) {
-                        mAccessibilityInteractionConnectionManager.ensureConnection();
-                    }
-
-                    if (view.getImportantForAccessibility() == View.IMPORTANT_FOR_ACCESSIBILITY_AUTO) {
-                        view.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_YES);
-                    }
-
-                    // Set up the input pipeline.
-                    CharSequence counterSuffix = attrs.getTitle();
-                    mSyntheticInputStage = new SyntheticInputStage();
-                    InputStage viewPostImeStage = new ViewPostImeInputStage(mSyntheticInputStage);
-                    InputStage nativePostImeStage = new NativePostImeInputStage(viewPostImeStage,
-                            "aq:native-post-ime:" + counterSuffix);
-                    InputStage earlyPostImeStage = new EarlyPostImeInputStage(nativePostImeStage);
-                    InputStage imeStage = new ImeInputStage(earlyPostImeStage,
-                            "aq:ime:" + counterSuffix);
-                    InputStage viewPreImeStage = new ViewPreImeInputStage(imeStage);
-                    InputStage nativePreImeStage = new NativePreImeInputStage(viewPreImeStage,
-                            "aq:native-pre-ime:" + counterSuffix);
-
-                    mFirstInputStage = nativePreImeStage;
-                    mFirstPostImeInputStage = earlyPostImeStage;
-                    mPendingInputEventQueueLengthCounterName = "aq:pending:" + counterSuffix;
                 }
             }
-        }
-
 
         @Override
-        public void requestLayout() {
+        public void requestLayout () {
             if (!mHandlingLayoutInLayoutRequest) {
-                //检查当前线程是否是主线程，对视图的操作只能在主线程中进行，否则抛异常
+                //检查当前线程是否是主线程，对视图的操作只能在UI线程中进行，否则抛异常
                 checkThread();
+                //应用程序进程的UI线程正在被请求执行一个UI布局操作
                 mLayoutRequested = true;
                 scheduleTraversals();
             }
         }
+
         void checkThread() {
             if (mThread != Thread.currentThread()) {
                 throw new CalledFromWrongThreadException(
@@ -527,23 +375,257 @@ public class ShowLayout extends Activity{
                 //Choreographer类型，用于发送消息
                 mChoreographer.postCallback(
                         Choreographer.CALLBACK_TRAVERSAL, mTraversalRunnable, null);
-                if (!mUnbufferedInputDispatch) {
-                    scheduleConsumeBatchedInput();
-                }
-                //通知硬件渲染器一个新的frame将要被添加
-                notifyRendererOfFramePending();
-                pokeDrawLockIfNeeded();
+                ...
             }
         }
 
+        final TraversalRunnable mTraversalRunnable = new TraversalRunnable();
+        final class TraversalRunnable implements Runnable {
+            @Override
+            public void run() {
+                doTraversal();
+            }
+        }
+        void doTraversal() {
+            if (mTraversalScheduled) {
+                mTraversalScheduled = false;
+                mHandler.getLooper().getQueue().removeSyncBarrier(mTraversalBarrier);
+                if (mProfile) {
+                    Debug.startMethodTracing("ViewAncestor");
+                }
+                performTraversals();
+                if (mProfile) {
+                    Debug.stopMethodTracing();
+                    mProfile = false;
+                }
+            }
+        }
     }
 
+    /**
+     * step5: ViewRootImpl.performTraversals()
+     */
+    private void performTraversals() {
+        final View host = mView;   //mView就是Activity的根窗口mDecor
+        ...
+        //一、下面代码主要确定Activity窗口的大小
+        boolean windowSizeMayChange = false;
+        //Activity窗口的宽度desiredWindowWidth和高度desiredWindowHeight
+        int desiredWindowWidth;
+        int desiredWindowHeight;
+        ...
+        //Activity窗口当前的宽度和高度是保存ViewRoot类的成员变量mWinFrame中的
+        Rect frame = mWinFrame;
+        if (mFirst) {
+            /*
+             *  如果Activity窗口是第一次被请求执行测量、布局和绘制操作，
+             *  即ViewRoot类的成员变量mFirst的值等于true，那么它的当
+             *  前宽度desiredWindowWidth和当前高度desiredWindowHeight
+             *  就等于屏幕的宽度和高度，否则的话，
+             *  它的当前宽度desiredWindowWidth和当前高度desiredWindowHeight
+             *  就等于保存在ViewRoot类的成员变量mWinFrame中的宽度和高度值。
+             */
+            ...
+            if (lp.type == WindowManager.LayoutParams.TYPE_STATUS_BAR_PANEL
+                    || lp.type == WindowManager.LayoutParams.TYPE_INPUT_METHOD) {
+                // NOTE -- system code, won't try to do compat mode.
+                Point size = new Point();
+                mDisplay.getRealSize(size);
+                desiredWindowWidth = size.x;
+                desiredWindowHeight = size.y;
+            } else {
+                DisplayMetrics packageMetrics =
+                        mView.getContext().getResources().getDisplayMetrics();
+                desiredWindowWidth = packageMetrics.widthPixels;
+                desiredWindowHeight = packageMetrics.heightPixels;
+            }
 
+            ...
 
+        } else {
+            /*
+             * 如果Activity窗口不是第一次被请求执行测量、布局和绘制操作，
+             * 并且Activity窗口主动上一次请求WindowManagerService
+             * 服务计算得到的宽度mWidth和高度mHeight不等于Activity窗
+             * 口的当前宽度desiredWindowWidth和当前高度desiredWindowHeight，
+             * 那么就说明Activity窗口的大小发生了变化，
+             * 这时候变量windowSizeMayChange的值就会被标记为true，
+             * 以便接下来可以对Activity窗口的大小变化进行处理
+             */
+            desiredWindowWidth = frame.width();
+            desiredWindowHeight = frame.height();
+            if (desiredWindowWidth != mWidth || desiredWindowHeight != mHeight) {
+                ...
+                windowSizeMayChange = true;
+            }
+        }
+        ...
 
+        boolean insetsChanged = false;
+        boolean layoutRequested = mLayoutRequested && (!mStopped || mReportNextDraw);
+        if (layoutRequested) {
+            final Resources res = mView.getContext().getResources();
+            if (mFirst) {
+                mAttachInfo.mInTouchMode = !mAddedTouchMode;
+                ensureTouchModeLocally(mAddedTouchMode);
+            } else {
+                ...
+                if (!mPendingOutsets.equals(mAttachInfo.mOutsets)) {
+                    insetsChanged = true;
+                }
+                if (lp.width == ViewGroup.LayoutParams.WRAP_CONTENT
+                        || lp.height == ViewGroup.LayoutParams.WRAP_CONTENT) {
 
+                    /*
+                     * 如果Activity窗口的宽度被设置为ViewGroup.LayoutParams.WRAP_CONTENT或者
+                     * 高度被设置为ViewGroup.LayoutParams.WRAP_CONTENT，那么就意味着Activity
+                     * 窗口的大小要等于内容区域的大小。但是由于Activity窗口的大小是需要覆盖整个屏幕的，
+                     * 因此，这时候就会Activity窗口的当前宽度desiredWindowWidth和当前高度desiredWindowHeight
+                     * 设置为屏幕的宽度和高度。也就是说，如果我们将Activity窗口的宽度和高度设置为
+                     * ViewGroup.LayoutParams.WRAP_CONTENT，实际上就意味着它的宽度和高度等于屏幕的宽度和高度。
+                     * 这种情况也意味着Acitivity窗口的大小发生了变化，
+                     * 因此，就将变量windowResizesToFitContent的值设置为true。
+                     */
+                    windowSizeMayChange = true;
 
+                    if (lp.type == WindowManager.LayoutParams.TYPE_STATUS_BAR_PANEL
+                            || lp.type == WindowManager.LayoutParams.TYPE_INPUT_METHOD) {
+                        // NOTE -- system code, won't try to do compat mode.
+                        Point size = new Point();
+                        mDisplay.getRealSize(size);
+                        desiredWindowWidth = size.x;
+                        desiredWindowHeight = size.y;
+                    } else {
+                        DisplayMetrics packageMetrics = res.getDisplayMetrics();
+                        desiredWindowWidth = packageMetrics.widthPixels;
+                        desiredWindowHeight = packageMetrics.heightPixels;
+                    }
+                }
+            }
 
+            // Ask host how big it wants to be
+            // 调用measureHierarchy()尝试测量Activity根窗口mDecor的大小，返回值为窗口大小是否变化了
+            windowSizeMayChange |= measureHierarchy(host, lp, res,
+                    desiredWindowWidth, desiredWindowHeight);
+        }
+
+        ...
+
+        /*
+         * 检查是否需要处理Activity窗口的大小变化事件:
+         * mLayoutRequest==true，这说明应用程序进程正在请求对Activity窗口执行一次测量、布局和绘制操作;
+         * windowSizeMayChange==true，这说明前面检测到了Activity窗口的大小发生了变化；
+         * 当mDecor测量出来的宽高和Activity窗口的当前宽度mWidth和高度mHeight不一样，或者
+         * ctivity窗口的大小被要求设置成WRAP_CONTENT，即设置成和屏幕的宽度desiredWindowWidth
+         * 和高度desiredWindowHeight一致，但是WindowManagerService服务请求Activity窗口设置
+         * 的宽度frame.width()和高度frame.height()与它们不一致，而且与Activity窗口上一次请求
+         * WindowManagerService服务计算的宽度mWidth和高度mHeight也不一致，
+         * 那么也是认为Activity窗口大小发生了变化的
+         */
+        boolean windowShouldResize = layoutRequested && windowSizeMayChange
+                && ((mWidth != host.getMeasuredWidth() || mHeight != host.getMeasuredHeight())
+                || (lp.width == ViewGroup.LayoutParams.WRAP_CONTENT &&
+                frame.width() < desiredWindowWidth && frame.width() != mWidth)
+                || (lp.height == ViewGroup.LayoutParams.WRAP_CONTENT &&
+                frame.height() < desiredWindowHeight && frame.height() != mHeight));
+
+        ...
+
+        /**
+         * 接下来的两段代码都是在满足下面的条件之一的情况下执行的：
+         * 1. Activity窗口是第一次执行测量、布局和绘制操作，即ViewRoot类的成员变量mFirst的值等于true
+         * 2. 前面得到的变量windowShouldResize的值等于true，即Activity窗口的大小的确是发生了变化。
+         * 3. 前面得到的变量insetsChanged的值等于true，即Activity窗口的内容区域边衬发生了变化。
+         * 4. Activity窗口的可见性发生了变化，即变量viewVisibilityChanged的值等于true。
+         * 5. Activity窗口的属性发生了变化，即变量params指向了一个WindowManager.LayoutParams对象。
+         */
+        if (mFirst || windowShouldResize || insetsChanged ||
+                viewVisibilityChanged || params != null) {
+            ...
+            try {
+
+                //二、请求WindowManagerService服务计算Activity窗口的大小以及内容区域边衬大小和可见区域边衬大小
+                relayoutResult = relayoutWindow(params, viewVisibility, insetsPending);
+                ...
+            } catch (RemoteException e) {
+            }
+
+            ...
+            //将计算得到的Activity窗口的宽度和高度保存在ViewRoot类的成员变量mWidth和mHeight中
+            if (mWidth != frame.width() || mHeight != frame.height()) {
+                mWidth = frame.width();
+                mHeight = frame.height();
+            }
+            ...
+
+            //这段代码用来检查是否需要重新测量Activity窗口的大小
+            if (!mStopped || mReportNextDraw) {
+                boolean focusChangedDueToTouchMode = ensureTouchModeLocally(
+                        (relayoutResult&WindowManagerGlobal.RELAYOUT_RES_IN_TOUCH_MODE) != 0);
+                if (focusChangedDueToTouchMode || mWidth != host.getMeasuredWidth()
+                        || mHeight != host.getMeasuredHeight() || contentInsetsChanged) {
+                    int childWidthMeasureSpec = getRootMeasureSpec(mWidth, lp.width);
+                    int childHeightMeasureSpec = getRootMeasureSpec(mHeight, lp.height);
+
+                    // 一、测量控件大小（根窗口和其子控件树）
+                    performMeasure(childWidthMeasureSpec, childHeightMeasureSpec);
+                    int width = host.getMeasuredWidth();
+                    int height = host.getMeasuredHeight();
+                    boolean measureAgain = false;
+                    if (lp.horizontalWeight > 0.0f) {
+                        width += (int) ((mWidth - width) * lp.horizontalWeight);
+                        childWidthMeasureSpec = View.MeasureSpec.makeMeasureSpec(width,
+                                View.MeasureSpec.EXACTLY);
+                        measureAgain = true;
+                    }
+                    if (lp.verticalWeight > 0.0f) {
+                        height += (int) ((mHeight - height) * lp.verticalWeight);
+                        childHeightMeasureSpec = View.MeasureSpec.makeMeasureSpec(height,
+                                View.MeasureSpec.EXACTLY);
+                        measureAgain = true;
+                    }
+                    if (measureAgain) {
+                        // 一、测量控件大小（根窗口和其子控件树）
+                        performMeasure(childWidthMeasureSpec, childHeightMeasureSpec);
+                    }
+
+                    layoutRequested = true;
+                }
+            }
+        }else{
+            ...
+        }
+
+        final boolean didLayout = layoutRequested && (!mStopped || mReportNextDraw);
+        boolean triggerGlobalLayoutListener = didLayout
+                || mAttachInfo.mRecomputeGlobalAttributes;
+        if (didLayout) {
+            //二、布局过程
+            performLayout(lp, desiredWindowWidth, desiredWindowHeight);
+            ...
+        }
+        ...
+        boolean skipDraw = false;
+        boolean cancelDraw = mAttachInfo.mTreeObserver.dispatchOnPreDraw() ||
+                viewVisibility != View.VISIBLE;
+
+        if (!cancelDraw && !newSurface) {
+            if (!skipDraw || mReportNextDraw) {
+                ...
+                //三、绘制过程
+                performDraw();
+            }
+        } else {
+            if (viewVisibility == View.VISIBLE) {
+                // Try again
+                scheduleTraversals();
+            } else if (mPendingTransitions != null && mPendingTransitions.size() > 0) {
+                ...
+            }
+        }
+
+        mIsInTraversal = false;
+    }
 
 
 
