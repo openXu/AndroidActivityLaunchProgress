@@ -10,10 +10,15 @@ import android.content.Context;
 import android.content.pm.ActivityInfo;
 import android.content.res.Configuration;
 import android.content.res.Resources;
+import android.graphics.Canvas;
+import android.graphics.Matrix;
+import android.graphics.Paint;
 import android.graphics.PixelFormat;
 import android.graphics.Point;
+import android.graphics.PorterDuff;
 import android.graphics.Rect;
 import android.graphics.Region;
+import android.graphics.Shader;
 import android.graphics.drawable.Drawable;
 import android.hardware.display.DisplayManager;
 import android.os.Binder;
@@ -21,9 +26,11 @@ import android.os.Debug;
 import android.os.IBinder;
 import android.os.Looper;
 import android.os.RemoteException;
+import android.os.SystemClock;
 import android.os.Trace;
 import android.util.DisplayMetrics;
 import android.util.Log;
+import android.util.TimeUtils;
 import android.util.TypedValue;
 import android.view.Choreographer;
 import android.view.Display;
@@ -40,6 +47,7 @@ import android.view.ViewTreeObserver;
 import android.view.Window;
 import android.view.WindowManager;
 import android.view.accessibility.AccessibilityManager;
+import android.view.animation.LayoutAnimationController;
 import android.view.inputmethod.InputMethodManager;
 
 import com.android.server.am.IWindowSession;
@@ -887,7 +895,6 @@ public class ShowLayout extends Activity{
     protected void onLayout(boolean changed, int left, int top, int right, int bottom) {
         layoutChildren(left, top, right, bottom, false /* no force left gravity */);
     }
-
     void layoutChildren(int left, int top, int right, int bottom,
                         boolean forceLeftGravity) {
         //获取子控件数量
@@ -960,23 +967,179 @@ public class ShowLayout extends Activity{
 
 
 
+    /**
+     * step12：ViewRootImpl.performDraw()
+     * 控件绘制过程
+     */
+    private void performDraw() {
+        ...
 
+        mIsDrawing = true;
+        Trace.traceBegin(Trace.TRACE_TAG_VIEW, "draw");
+        try {
+            draw(fullRedrawNeeded);
+        } finally {
+            mIsDrawing = false;
+            Trace.traceEnd(Trace.TRACE_TAG_VIEW);
+        }
 
+        ...
+    }
+    private void draw(boolean fullRedrawNeeded) {
+        Surface surface = mSurface;
 
+        final Rect dirty = mDirty;
+        ...
 
+        if (!dirty.isEmpty() || mIsAnimating || accessibilityFocusDirty) {
+            if (mAttachInfo.mHardwareRenderer != null && mAttachInfo.mHardwareRenderer.isEnabled()) {
+                ...
+                //使用硬件渲染
+                mAttachInfo.mHardwareRenderer.draw(mView, mAttachInfo, this);
+            } else {
+                ...
+                // 通过软件渲染.
+                if (!drawSoftware(surface, mAttachInfo, xOffset, yOffset, scalingRequired, dirty)) {
+                    return;
+                }
+            }
+        }
 
+        ...
+    }
+    private boolean drawSoftware(Surface surface, AttachInfo attachInfo, int xoff, int yoff,
+                                 boolean scalingRequired, Rect dirty) {
+        final Canvas canvas;
 
+        try {
+            ...
+            canvas = mSurface.lockCanvas(dirty);
+            ...
+        } catch (Surface.OutOfResourcesException e) {
+            return false;
+        } catch (IllegalArgumentException e) {
+            return false;
+        }
+        ...
+        try {
+            ...
+            try {
+                ...
+                mView.draw(canvas);
+                ...
+            } finally {
+                    ...
+            }
+        } finally {
+           ...
+        }
+        return true;
+    }
 
+    /**
+     * step13：DecorView.draw()
+     */
+    @Override
+    public void draw(Canvas canvas) {
+        super.draw(canvas);
 
+        if (mMenuBackground != null) {
+            mMenuBackground.draw(canvas);
+        }
+    }
 
+    /**
+     * step14：View.draw()
+     */
+    public void draw(Canvas canvas) {
+        ...
+        /*
+         * 绘制遍历执行几个绘图步骤，必须以适当的顺序执行：
+         * 1.绘制背景
+         * 2.如果有必要，保存画布的图层，以准备失效
+         * 3.绘制视图的内容
+         * 4.绘制子控件
+         * 5.如果必要，绘制衰落边缘和恢复层
+         * 6.绘制装饰（比如滚动条）
+         */
 
+        // Step 1, 绘制背景
+        int saveCount;
 
+        if (!dirtyOpaque) {
+            drawBackground(canvas);
+        }
 
+        // 通常情况请跳过2和5步
+        final int viewFlags = mViewFlags;
+        boolean horizontalEdges = (viewFlags & FADING_EDGE_HORIZONTAL) != 0;
+        boolean verticalEdges = (viewFlags & FADING_EDGE_VERTICAL) != 0;
+        if (!verticalEdges && !horizontalEdges) {
+            // Step 3, 绘制本控件的内容
+            if (!dirtyOpaque) onDraw(canvas);
 
+            // Step 4, 绘制子控件
+            dispatchDraw(canvas);
 
+            // Overlay is part of the content and draws beneath Foreground
+            if (mOverlay != null && !mOverlay.isEmpty()) {
+                mOverlay.getOverlayView().dispatchDraw(canvas);
+            }
 
+            // Step 6, draw decorations (foreground, scrollbars)
+            onDrawForeground(canvas);
 
+            // we're done...
+            return;
+        }
+        //下面的代码是从第一步到第六步的完整流程
+        ...
+    }
 
+    /**
+     * step15：DecorView.onDraw()
+     */
+    public void onDraw(Canvas c) {
+        super.onDraw(c);
+        mBackgroundFallback.draw(mContentRoot, c, mContentParent);
+    }
+
+    /**
+     * step16：ViewGroup.dispatchDraw()
+     */
+    protected void dispatchDraw(Canvas canvas) {
+        ...
+        final int childrenCount = mChildrenCount;
+        final View[] children = mChildren;
+
+        if ((flags & FLAG_RUN_ANIMATION) != 0 && canAnimate()) {
+            ...
+            for (int i = 0; i < childrenCount; i++) {
+                while (transientIndex >= 0 && mTransientIndices.get(transientIndex) == i) {
+                    final View transientChild = mTransientViews.get(transientIndex);
+                    if ((transientChild.mViewFlags & VISIBILITY_MASK) == VISIBLE ||
+                            transientChild.getAnimation() != null) {
+                        more |= drawChild(canvas, transientChild, drawingTime);
+                    }
+                    transientIndex++;
+                    if (transientIndex >= transientCount) {
+                        transientIndex = -1;
+                    }
+                }
+                int childIndex = customOrder ? getChildDrawingOrder(childrenCount, i) : i;
+                final View child = (preorderedList == null)
+                        ? children[childIndex] : preorderedList.get(childIndex);
+                if ((child.mViewFlags & VISIBILITY_MASK) == VISIBLE || child.getAnimation() != null) {
+                    more |= drawChild(canvas, child, drawingTime);
+                }
+            }
+        }
+        ...
+    }
+
+    protected boolean drawChild(Canvas canvas, View child, long drawingTime) {
+        return child.draw(canvas, this, drawingTime);
+    }
 
 
 
