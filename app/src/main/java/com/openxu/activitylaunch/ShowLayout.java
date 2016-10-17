@@ -74,10 +74,10 @@ import static android.view.WindowManager.LayoutParams.TYPE_WALLPAPER;
  * created time : 16/9/3 下午5:33
  * blog : http://blog.csdn.net/xmxkf
  * github : http://blog.csdn.net/xmxkf
- * class name : StartActivity
+ * class name : ShowLayout
  * discription :
  *
- * StartActivity主要研究Activity的创建过程，
+ * ShowLayout:Activity显示过程主干源码流程
  */
 public class ShowLayout extends Activity{
 

@@ -13,7 +13,7 @@ import android.view.Window;
  * created time : 16/9/3 下午5:33
  * blog : http://blog.csdn.net/xmxkf
  * github : http://blog.csdn.net/xmxkf
- * class name : StartActivity
+ * class name : SetContentView
  * discription :
  *
  * SetContentView主要研究Activity加载layout的过程，
